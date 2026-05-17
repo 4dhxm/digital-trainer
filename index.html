@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HBE LogicCircuit Digital Trainer</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="trainer-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Hanback Electronics Compatible Simulator</p>
+          <h1>HBE-LogicCircuit-Digital</h1>
+        </div>
+        <div class="power-cluster">
+          <span id="powerLabel" class="power-label">POWER OFF</span>
+          <button id="powerSwitch" class="power-switch" type="button" aria-pressed="false" aria-label="Toggle simulation power">
+            <span></span>
+          </button>
+          <span class="supply">DC +5V / 4A</span>
+        </div>
+      </header>
+
+      <section class="workbench" aria-label="Digital logic trainer board">
+        <aside class="library-panel" aria-label="Component library">
+          <div class="panel-title">
+            <span>Logic Modules</span>
+            <button id="clearBoard" type="button">Clear</button>
+          </div>
+          <div id="componentLibrary" class="component-library"></div>
+        </aside>
+
+        <section class="board-frame">
+          <svg id="wireLayer" class="wire-layer" aria-hidden="true"></svg>
+
+          <div class="rack top-rack">
+            <div class="rack-label">Pull-up Resistor Block</div>
+            <div id="pullUps" class="resistor-row"></div>
+          </div>
+
+          <aside class="left-io board-zone">
+            <h2>Input</h2>
+            <section class="io-block">
+              <div class="block-title">Dip Switch 8bit x4</div>
+              <div id="dipSwitches" class="dip-grid"></div>
+            </section>
+            <section class="io-block">
+              <div class="block-title">Slide Switch x12</div>
+              <div id="slideSwitches" class="slide-grid"></div>
+            </section>
+            <section class="io-block">
+              <div class="block-title">Button Switch x4</div>
+              <div id="buttonSwitches" class="button-grid"></div>
+            </section>
+            <section class="io-block pulse-block">
+              <div class="block-title">Waveform Generator</div>
+              <label for="pulseRate">0.2-1kHz</label>
+              <input id="pulseRate" type="range" min="0.2" max="1000" value="2" step="0.2" />
+              <div class="pulse-readout"><span id="pulseValue">2.0</span> Hz</div>
+              <div id="pulsePin" class="pin source-pin" role="button" tabindex="0" data-node="PULSE" data-kind="source" aria-label="Pulse generator output"></div>
+            </section>
+            <section class="io-block daq">
+              <div class="block-title">DAQ: PC Board</div>
+              <div class="daq-port"></div>
+            </section>
+          </aside>
+
+          <section class="center-zone">
+            <div class="design-label">Logic Circuit Design Block</div>
+            <div id="moduleGrid" class="module-grid" aria-label="4 by 4 module dropzone"></div>
+          </section>
+
+          <aside class="right-io board-zone">
+            <h2>Output</h2>
+            <section class="io-block">
+              <div class="block-title">LED x16</div>
+              <div id="ledBank" class="led-bank"></div>
+            </section>
+            <section class="io-block segment-stack">
+              <div class="block-title">7-Segment Anode Common</div>
+              <div id="segAnode" class="seven-seg" data-common="anode"></div>
+            </section>
+            <section class="io-block segment-stack">
+              <div class="block-title">7-Segment Cathode Common</div>
+              <div id="segCathode" class="seven-seg" data-common="cathode"></div>
+            </section>
+            <section class="io-block power-output">
+              <div class="block-title">Power(+5V)</div>
+              <div class="banana-row">
+                <div class="banana high">+5V</div>
+                <div class="banana low">GND</div>
+              </div>
+            </section>
+          </aside>
+
+          <div class="rack bottom-rack">
+            <div class="rack-label">Pull-down Resistor Block</div>
+            <div id="pullDowns" class="resistor-row"></div>
+          </div>
+        </section>
+      </section>
+
+      <footer class="statusbar">
+        <span id="statusText">Power is off. Drop modules into the 4x4 design block, then drag wires from output pins to input pins.</span>
+        <span id="wireCount">0 wires</span>
+      </footer>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
