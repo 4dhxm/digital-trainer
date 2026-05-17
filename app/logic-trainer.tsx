@@ -327,14 +327,6 @@ export default function LogicTrainer() {
     window.setTimeout(readPins, 0);
   }
 
-  function disconnectSource(source: string) {
-    setWires((current) => {
-      const next = current.filter((wire) => wire.from !== source);
-      if (next.length !== current.length) setMessage(`Disconnected ${labelPin(source)}.`);
-      return next;
-    });
-  }
-
   function disconnectPin(pin: string) {
     setWires((current) => {
       const next = current.filter((wire) => wire.from !== pin && wire.to !== pin);
@@ -351,10 +343,6 @@ export default function LogicTrainer() {
     }
 
     setWires((current) => {
-      if (connection.from.startsWith("DIP") && current.some((wire) => wire.from === connection.from)) {
-        setMessage("Each DIP switch pin can drive only one jumper cable.");
-        return current;
-      }
       const next = current.filter((wire) => wire.to !== connection.to);
       next.push({ id: crypto.randomUUID(), from: connection.from, to: connection.to, color: wireColors[next.length % wireColors.length] });
       setMessage(`Connected ${labelPin(connection.from)} to ${labelPin(connection.to)}.`);
@@ -508,7 +496,7 @@ export default function LogicTrainer() {
             >
               <WireLayer ref={wireLayerRef} wires={wires} dragWire={dragWire} pinBoxes={pinBoxes} values={values} />
               <CaseHardware />
-              <PullRail top values={values} sourceHandlers={sourceHandlers} connectedSources={connectedSources} disconnectSource={disconnectSource} />
+              <PullRail top values={values} sourceHandlers={sourceHandlers} connectedSources={connectedSources} />
               <LeftInputs
                 dip={dip}
                 setDip={setDip}
@@ -521,7 +509,6 @@ export default function LogicTrainer() {
                 sourceHandlers={sourceHandlers}
                 values={values}
                 connectedSources={connectedSources}
-                disconnectSource={disconnectSource}
               />
               <CenterGrid
                 slots={slots}
@@ -547,7 +534,7 @@ export default function LogicTrainer() {
                 dragging={Boolean(dragWire)}
                 justDraggedRef={justDraggedRef}
               />
-              <PullRail values={values} sourceHandlers={sourceHandlers} connectedSources={connectedSources} disconnectSource={disconnectSource} />
+              <PullRail values={values} sourceHandlers={sourceHandlers} connectedSources={connectedSources} />
             </section>
             <div className="metal-edge flex h-20 items-center justify-center rounded-b-[18px] border-x-[18px] border-b-[10px] border-[#252525] shadow-2xl">
               <div className="h-10 w-64 rounded-b-full border-4 border-[#5b5b5b] bg-gradient-to-b from-[#efefef] to-[#787878] shadow-inner" />
@@ -643,14 +630,12 @@ function PullRail({
   top = false,
   values,
   sourceHandlers,
-  connectedSources,
-  disconnectSource
+  connectedSources
 }: {
   top?: boolean;
   values: Record<string, boolean>;
   sourceHandlers: (pin: string) => object;
   connectedSources: Set<string>;
-  disconnectSource: (source: string) => void;
 }) {
   const prefix = top ? "PU" : "PD";
   return (
@@ -668,9 +653,6 @@ function PullRail({
                 data-pin-id={id}
                 className={`pin-metal h-5 w-5 rounded-full ${values[id] ? "ring-2 ring-green-400" : ""} ${isConnected ? "ring-4 ring-[#ffd000]" : ""}`}
                 aria-label={`${id} pin`}
-                onClick={() => {
-                  if (isConnected) disconnectSource(id);
-                }}
                 {...sourceHandlers(id)}
               />
             <ResistorIcon ground={!top} />
@@ -700,7 +682,6 @@ function LeftInputs(props: {
   };
   values: Record<string, boolean>;
   connectedSources: Set<string>;
-  disconnectSource: (source: string) => void;
 }) {
   return (
     <aside className="col-start-1 row-start-2 grid gap-3">
@@ -772,9 +753,6 @@ function LeftInputs(props: {
             type="button"
             data-pin-id="PULSE"
             className={`pin-metal h-6 w-6 rounded-full ${props.connectedSources.has("PULSE") ? "ring-4 ring-[#ffd000]" : ""}`}
-            onClick={() => {
-              if (props.connectedSources.has("PULSE")) props.disconnectSource("PULSE");
-            }}
             {...props.sourceHandlers("PULSE")}
             aria-label="Pulse output"
           />
@@ -1569,8 +1547,7 @@ function labelPin(pin: string) {
 }
 
 function valueFromWire(pin: string, wires: Wire[], values: Record<string, boolean>) {
-  const wire = wires.find((item) => item.to === pin);
-  return wire ? Boolean(values[wire.from]) : false;
+  return wires.some((item) => item.to === pin && values[item.from]);
 }
 
 function evaluateModule(module: PlacedModule, input: boolean[], memory: Record<string, number>, pulse: boolean) {
