@@ -150,6 +150,7 @@ export default function LogicTrainer() {
   const [pinBoxes, setPinBoxes] = useState<Record<string, PinBox>>({});
   const [dragWire, setDragWire] = useState<{ from: string; point: PinBox } | null>(null);
   const dragWireRef = useRef<{ from: string; point: PinBox } | null>(null);
+  const dragStartRef = useRef<{ from: string; x: number; y: number } | null>(null);
   const [hoverPin, setHoverPin] = useState<string | null>(null);
   const justDraggedRef = useRef(false);
   const [selectedPin, setSelectedPin] = useState<string | null>(null);
@@ -382,11 +383,7 @@ export default function LogicTrainer() {
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     justDraggedRef.current = true;
-    const layer = wireLayerRef.current?.getBoundingClientRect() || boardRef.current?.getBoundingClientRect();
-    if (!layer) return;
-    const next = { from, point: { x: event.clientX - layer.left, y: event.clientY - layer.top } };
-    dragWireRef.current = next;
-    setDragWire(next);
+    dragStartRef.current = { from, x: event.clientX, y: event.clientY };
   }
 
   function moveWire(event: PointerEvent<HTMLElement>) {
@@ -400,6 +397,7 @@ export default function LogicTrainer() {
   }
 
   function finishWireAt(clientX: number, clientY: number) {
+    dragStartRef.current = null;
     const current = dragWireRef.current;
     if (!current) return false;
     const target = document.elementFromPoint(clientX, clientY)?.closest("[data-pin-id]") as HTMLElement | null;
@@ -416,6 +414,11 @@ export default function LogicTrainer() {
   }
 
   function finishWire(event: PointerEvent<HTMLElement>) {
+    dragStartRef.current = null;
+    if (!dragWireRef.current) {
+      justDraggedRef.current = false;
+      return;
+    }
     const didFinish = finishWireAt(event.clientX, event.clientY);
     if (!didFinish) return;
     event.preventDefault();
@@ -424,13 +427,27 @@ export default function LogicTrainer() {
 
   useEffect(() => {
     const handleMove = (event: globalThis.PointerEvent) => {
+      if (!dragStartRef.current) return;
+      const start = dragStartRef.current;
+      const dx = event.clientX - start.x;
+      const dy = event.clientY - start.y;
+      if (!dragWireRef.current) {
+        if (Math.hypot(dx, dy) < 6) return;
+        const layer = wireLayerRef.current?.getBoundingClientRect() || boardRef.current?.getBoundingClientRect();
+        if (!layer) return;
+        const next = { from: start.from, point: { x: event.clientX - layer.left, y: event.clientY - layer.top } };
+        dragWireRef.current = next;
+        setDragWire(next);
+      } else {
+        const current = dragWireRef.current;
+        const layer = wireLayerRef.current?.getBoundingClientRect() || boardRef.current?.getBoundingClientRect();
+        if (!layer) return;
+        const next = { ...current, point: { x: event.clientX - layer.left, y: event.clientY - layer.top } };
+        dragWireRef.current = next;
+        setDragWire(next);
+      }
       const current = dragWireRef.current;
       if (!current) return;
-      const layer = wireLayerRef.current?.getBoundingClientRect() || boardRef.current?.getBoundingClientRect();
-      if (!layer) return;
-      const next = { ...current, point: { x: event.clientX - layer.left, y: event.clientY - layer.top } };
-      dragWireRef.current = next;
-      setDragWire(next);
       const targetEl = document
         .elementFromPoint(event.clientX, event.clientY)
         ?.closest("[data-pin-id]") as HTMLElement | null;
@@ -440,6 +457,12 @@ export default function LogicTrainer() {
       setHoverPin(candidate && candidate !== current.from ? candidate : null);
     };
     const handleUp = (event: globalThis.PointerEvent) => {
+      dragStartRef.current = null;
+      if (!dragWireRef.current) {
+        justDraggedRef.current = false;
+        setHoverPin(null);
+        return;
+      }
       const finished = finishWireAt(event.clientX, event.clientY);
       setHoverPin(null);
       if (finished) {
@@ -695,10 +718,7 @@ function LeftInputs(props: {
                     type="button"
                     data-pin-id={id}
                     className={`relative h-9 rounded-[2px] border border-[#9b9b9b] bg-[#f8f8f8] shadow-md ${props.dip[index] ? "pt-1" : "pb-1"} ${isConnected ? "ring-4 ring-[#ffd000]" : ""}`}
-                    onClick={() => {
-                      if (isConnected) props.disconnectSource(id);
-                      else props.setDip(props.dip.map((value, i) => (i === index ? !value : value)));
-                    }}
+                    onClick={() => props.setDip(props.dip.map((value, i) => (i === index ? !value : value)))}
                     {...props.sourceHandlers(id)}
                     aria-label={`DIP ${index + 1}`}
                   >
@@ -721,10 +741,7 @@ function LeftInputs(props: {
                 type="button"
                 data-pin-id={id}
                 className={`h-10 rounded-sm border border-[#151515] bg-[#1b1b1b] p-1 shadow-inner ${isConnected ? "ring-4 ring-[#ffd000]" : ""}`}
-                onClick={() => {
-                  if (isConnected) props.disconnectSource(id);
-                  else props.setSlides(props.slides.map((item, i) => (i === index ? !item : item)));
-                }}
+                onClick={() => props.setSlides(props.slides.map((item, i) => (i === index ? !item : item)))}
                 {...props.sourceHandlers(id)}
                 aria-label={`Slide switch ${index + 1}`}
               >
@@ -745,7 +762,6 @@ function LeftInputs(props: {
               setButtons={props.setButtons}
               buttons={props.buttons}
               sourceHandlers={props.sourceHandlers(`BTN${index}`)}
-              disconnectSource={() => props.disconnectSource(`BTN${index}`)}
             />
           ))}
         </div>
@@ -783,8 +799,7 @@ function PushButton({
   connected,
   buttons,
   setButtons,
-  sourceHandlers,
-  disconnectSource
+  sourceHandlers
 }: {
   index: number;
   active: boolean;
@@ -797,7 +812,6 @@ function PushButton({
     onPointerUp: (event: PointerEvent<HTMLElement>) => void;
     onPointerCancel: () => void;
   };
-  disconnectSource: () => void;
 }) {
   const setActive = (value: boolean) => setButtons(buttons.map((item, i) => (i === index ? value : item)));
 
@@ -810,9 +824,6 @@ function PushButton({
           ? "translate-y-1 bg-[radial-gradient(circle_at_35%_28%,#fff9a8,#ffd000_50%,#a36b00_88%)] text-[#231900] shadow-inner"
           : "bg-[radial-gradient(circle_at_35%_28%,#777,#1d1d1d_72%)] text-white"
       } ${connected ? "ring-4 ring-[#ffd000]" : ""}`}
-      onClick={() => {
-        if (connected) disconnectSource();
-      }}
       onPointerDown={(event) => {
         setActive(true);
         sourceHandlers.onPointerDown(event);
