@@ -87,3 +87,15 @@ button {
 .seven-seg-shadow {
   filter: drop-shadow(0 0 9px rgba(255, 28, 28, 0.85));
 }
+
+.pin-drop-ok {
+  outline: 5px solid #23d84f !important;
+  outline-offset: 4px;
+  box-shadow: 0 0 0 6px rgba(35, 216, 79, 0.22), 0 0 22px rgba(35, 216, 79, 0.85) !important;
+}
+
+.pin-drop-bad {
+  outline: 4px solid #ff2d2d !important;
+  outline-offset: 4px;
+  box-shadow: 0 0 0 5px rgba(255, 45, 45, 0.16), 0 0 16px rgba(255, 45, 45, 0.65) !important;
+}

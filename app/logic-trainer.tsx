@@ -69,9 +69,21 @@ type TrainerState = {
   values: Record<string, boolean>;
 };
 
+type SavedTrainerState = {
+  power: boolean;
+  dip: boolean[];
+  slides: boolean[];
+  buttons: boolean[];
+  dial: number;
+  slots: Array<PlacedModule | null>;
+  wires: Wire[];
+  memory: Record<string, number>;
+};
+
 const TrainerContext = createContext<TrainerState | null>(null);
 
 const wireColors = ["#ef4444", "#2563eb", "#16a34a", "#f59e0b", "#7c3aed", "#0f766e", "#db2777", "#111827"];
+const storageKey = "hbe-logic-trainer-state-v1";
 
 const inventory: ModuleTemplate[] = [
   item("7400", "NAND Gate", "7400", "NAND", 6, 4, 2, "Basic Gates"),
@@ -133,6 +145,11 @@ export default function LogicTrainer() {
   const [memory, setMemory] = useState<Record<string, number>>({});
   const [pinBoxes, setPinBoxes] = useState<Record<string, PinBox>>({});
   const [dragWire, setDragWire] = useState<{ from: string; point: PinBox } | null>(null);
+  const dragWireRef = useRef<{ from: string; point: PinBox } | null>(null);
+  const [hoverPin, setHoverPin] = useState<string | null>(null);
+  const justDraggedRef = useRef(false);
+  const [selectedPin, setSelectedPin] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [message, setMessage] = useState("Drag a white module card onto a black socket, then wire output pins to input pins.");
 
@@ -151,7 +168,8 @@ export default function LogicTrainer() {
     document.querySelectorAll<HTMLElement>("[data-pin-id]").forEach((node) => {
       const id = node.dataset.pinId;
       if (!id) return;
-      const rect = node.getBoundingClientRect();
+      const anchor = node.querySelector<HTMLElement>("[data-pin-anchor]");
+      const rect = (anchor || node).getBoundingClientRect();
       next[id] = {
         x: rect.left - layer.left + rect.width / 2,
         y: rect.top - layer.top + rect.height / 2
@@ -161,10 +179,51 @@ export default function LogicTrainer() {
   }, []);
 
   useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        const saved = JSON.parse(raw) as Partial<SavedTrainerState>;
+        if (typeof saved.power === "boolean") setPower(saved.power);
+        if (Array.isArray(saved.dip) && saved.dip.length === 32) setDip(saved.dip.map(Boolean));
+        if (Array.isArray(saved.slides) && saved.slides.length === 12) setSlides(saved.slides.map(Boolean));
+        if (Array.isArray(saved.buttons) && saved.buttons.length === 4) setButtons(saved.buttons.map(Boolean));
+        if (typeof saved.dial === "number") setDial(saved.dial);
+        if (Array.isArray(saved.slots) && saved.slots.length === 16) setSlots(saved.slots);
+        if (Array.isArray(saved.wires)) setWires(saved.wires);
+        if (saved.memory && typeof saved.memory === "object") setMemory(saved.memory);
+        setMessage("Restored saved trainer layout from this browser.");
+        window.setTimeout(readPins, 0);
+      }
+    } catch {
+      setMessage("Saved trainer layout could not be restored.");
+    } finally {
+      setHydrated(true);
+    }
+  }, [readPins]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const saved: SavedTrainerState = { power, dip, slides, buttons, dial, slots, wires, memory };
+    window.localStorage.setItem(storageKey, JSON.stringify(saved));
+  }, [buttons, dial, dip, hydrated, memory, power, slides, slots, wires]);
+
+  useEffect(() => {
     readPins();
     window.addEventListener("resize", readPins);
     return () => window.removeEventListener("resize", readPins);
   }, [readPins, slots]);
+
+  useEffect(() => {
+    document.querySelectorAll<HTMLElement>("[data-pin-id]").forEach((node) => {
+      node.classList.remove("pin-drop-ok", "pin-drop-bad");
+      const id = node.dataset.pinId;
+      if (!dragWire || !id || !hoverPin || id !== hoverPin || id === dragWire.from) return;
+      node.classList.add(resolveConnection(dragWire.from, id) ? "pin-drop-ok" : "pin-drop-bad");
+    });
+    return () => {
+      document.querySelectorAll<HTMLElement>("[data-pin-id]").forEach((node) => node.classList.remove("pin-drop-ok", "pin-drop-bad"));
+    };
+  }, [dragWire, hoverPin, slots]);
 
   const values = useMemo(() => {
     const next: Record<string, boolean> = {};
@@ -279,51 +338,128 @@ export default function LogicTrainer() {
     });
   }
 
+  function connectPins(first: string, second: string) {
+    const connection = first !== second ? resolveConnection(first, second) : null;
+    if (!connection) {
+      setMessage("Pick one output/source pin and one input/target pin.");
+      return false;
+    }
+
+    setWires((current) => {
+      if (connection.from.startsWith("DIP") && current.some((wire) => wire.from === connection.from)) {
+        setMessage("Each DIP switch pin can drive only one jumper cable.");
+        return current;
+      }
+      const next = current.filter((wire) => wire.to !== connection.to);
+      next.push({ id: crypto.randomUUID(), from: connection.from, to: connection.to, color: wireColors[next.length % wireColors.length] });
+      setMessage(`Connected ${labelPin(connection.from)} to ${labelPin(connection.to)}.`);
+      return next;
+    });
+    setSelectedPin(null);
+    window.setTimeout(readPins, 0);
+    return true;
+  }
+
+  function handlePinClick(pin: string) {
+    if (selectedPin) {
+      if (selectedPin === pin) {
+        setSelectedPin(null);
+        setMessage(`Selection cleared.`);
+        return;
+      }
+      connectPins(selectedPin, pin);
+      return;
+    }
+    setSelectedPin(pin);
+    setMessage(`Selected ${labelPin(pin)}. Click a compatible connector to attach a jumper.`);
+  }
+
   function beginWire(event: PointerEvent<HTMLElement>, from: string) {
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
+    justDraggedRef.current = true;
     const layer = wireLayerRef.current?.getBoundingClientRect() || boardRef.current?.getBoundingClientRect();
     if (!layer) return;
-    setDragWire({ from, point: { x: event.clientX - layer.left, y: event.clientY - layer.top } });
+    const next = { from, point: { x: event.clientX - layer.left, y: event.clientY - layer.top } };
+    dragWireRef.current = next;
+    setDragWire(next);
   }
 
   function moveWire(event: PointerEvent<HTMLElement>) {
-    if (!dragWire) return;
+    const current = dragWireRef.current;
+    if (!current) return;
     const layer = wireLayerRef.current?.getBoundingClientRect() || boardRef.current?.getBoundingClientRect();
     if (!layer) return;
-    setDragWire({ ...dragWire, point: { x: event.clientX - layer.left, y: event.clientY - layer.top } });
+    const next = { ...current, point: { x: event.clientX - layer.left, y: event.clientY - layer.top } };
+    dragWireRef.current = next;
+    setDragWire(next);
+  }
+
+  function finishWireAt(clientX: number, clientY: number) {
+    const current = dragWireRef.current;
+    if (!current) return false;
+    const target = document.elementFromPoint(clientX, clientY)?.closest("[data-pin-id]") as HTMLElement | null;
+    const to = target?.dataset.pinId || nearestCompatiblePin(clientX, clientY, current.from);
+    if (to && to !== current.from && resolveConnection(current.from, to)) {
+      connectPins(current.from, to);
+    } else if (to && to !== current.from) {
+      setMessage("That jumper needs one output/source pin and one input/target pin.");
+    }
+    dragWireRef.current = null;
+    setDragWire(null);
+    window.setTimeout(readPins, 0);
+    return true;
   }
 
   function finishWire(event: PointerEvent<HTMLElement>) {
-    if (!dragWire) return;
+    const didFinish = finishWireAt(event.clientX, event.clientY);
+    if (!didFinish) return;
     event.preventDefault();
     event.stopPropagation();
-    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-pin-id]") as HTMLElement | null;
-    const to = target?.dataset.pinId || nearestCompatiblePin(event.clientX, event.clientY, dragWire.from);
-    const connection = to && to !== dragWire.from ? resolveConnection(dragWire.from, to) : null;
-    if (connection) {
-      setWires((current) => {
-        if (connection.from.startsWith("DIP") && current.some((wire) => wire.from === connection.from)) {
-          setMessage("Each DIP switch pin can drive only one jumper cable.");
-          return current;
-        }
-        const next = current.filter((wire) => wire.to !== connection.to);
-        next.push({ id: crypto.randomUUID(), from: connection.from, to: connection.to, color: wireColors[next.length % wireColors.length] });
-        setMessage(`Connected ${labelPin(connection.from)} to ${labelPin(connection.to)}.`);
-        return next;
-      });
-    } else if (to && to !== dragWire.from) {
-      setMessage("That jumper needs one output/source pin and one input/target pin.");
-    }
-    setDragWire(null);
-    window.setTimeout(readPins, 0);
   }
+
+  useEffect(() => {
+    const handleMove = (event: globalThis.PointerEvent) => {
+      const current = dragWireRef.current;
+      if (!current) return;
+      const layer = wireLayerRef.current?.getBoundingClientRect() || boardRef.current?.getBoundingClientRect();
+      if (!layer) return;
+      const next = { ...current, point: { x: event.clientX - layer.left, y: event.clientY - layer.top } };
+      dragWireRef.current = next;
+      setDragWire(next);
+      const targetEl = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest("[data-pin-id]") as HTMLElement | null;
+      const targetId = targetEl?.dataset.pinId;
+      const candidate =
+        targetId && targetId !== current.from ? targetId : nearestCompatiblePin(event.clientX, event.clientY, current.from);
+      setHoverPin(candidate && candidate !== current.from ? candidate : null);
+    };
+    const handleUp = (event: globalThis.PointerEvent) => {
+      const finished = finishWireAt(event.clientX, event.clientY);
+      setHoverPin(null);
+      if (finished) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    window.addEventListener("pointermove", handleMove, true);
+    window.addEventListener("pointerup", handleUp, true);
+    return () => {
+      window.removeEventListener("pointermove", handleMove, true);
+      window.removeEventListener("pointerup", handleUp, true);
+    };
+  });
 
   const sourceHandlers = (pin: string) => ({
     onPointerDown: (event: PointerEvent<HTMLElement>) => beginWire(event, pin),
     onPointerMove: moveWire,
     onPointerUp: finishWire,
-    onPointerCancel: () => setDragWire(null)
+    onPointerCancel: () => {
+      dragWireRef.current = null;
+      setDragWire(null);
+      setHoverPin(null);
+    }
   });
 
   const contextValue = useMemo<TrainerState>(() => ({ slots, wires, values }), [slots, values, wires]);
@@ -368,8 +504,22 @@ export default function LogicTrainer() {
                 onRemove={removeModule}
                 connectedPins={connectedPins}
                 disconnectPin={disconnectPin}
+                selectedPin={selectedPin}
+                handlePinClick={handlePinClick}
+                justDraggedRef={justDraggedRef}
               />
-              <RightOutputs power={power} setPower={setPower} values={values} />
+              <RightOutputs
+                power={power}
+                setPower={setPower}
+                values={values}
+                connectedPins={connectedPins}
+                selectedPin={selectedPin}
+                handlePinClick={handlePinClick}
+                disconnectPin={disconnectPin}
+                sourceHandlers={sourceHandlers}
+                dragging={Boolean(dragWire)}
+                justDraggedRef={justDraggedRef}
+              />
               <PullRail values={values} sourceHandlers={sourceHandlers} />
             </section>
             <div className="metal-edge flex h-20 items-center justify-center rounded-b-[18px] border-x-[18px] border-b-[10px] border-[#252525] shadow-2xl">
@@ -655,7 +805,10 @@ function CenterGrid({
   onPlace,
   onRemove,
   connectedPins,
-  disconnectPin
+  disconnectPin,
+  selectedPin,
+  handlePinClick,
+  justDraggedRef
 }: {
   slots: Array<PlacedModule | null>;
   values: Record<string, boolean>;
@@ -664,6 +817,9 @@ function CenterGrid({
   onRemove: (slotIndex: number) => void;
   connectedPins: Set<string>;
   disconnectPin: (pin: string) => void;
+  selectedPin: string | null;
+  handlePinClick: (pin: string) => void;
+  justDraggedRef: React.MutableRefObject<boolean>;
 }) {
   return (
     <section className="col-start-2 row-start-2">
@@ -680,6 +836,9 @@ function CenterGrid({
             onRemove={onRemove}
             connectedPins={connectedPins}
             disconnectPin={disconnectPin}
+            selectedPin={selectedPin}
+            handlePinClick={handlePinClick}
+            justDraggedRef={justDraggedRef}
           />
         ))}
       </div>
@@ -695,7 +854,10 @@ function SocketBlock({
   onPlace,
   onRemove,
   connectedPins,
-  disconnectPin
+  disconnectPin,
+  selectedPin,
+  handlePinClick,
+  justDraggedRef
 }: {
   slotIndex: number;
   module: PlacedModule | null;
@@ -705,6 +867,9 @@ function SocketBlock({
   onRemove: (slotIndex: number) => void;
   connectedPins: Set<string>;
   disconnectPin: (pin: string) => void;
+  selectedPin: string | null;
+  handlePinClick: (pin: string) => void;
+  justDraggedRef: React.MutableRefObject<boolean>;
 }) {
   return (
     <div
@@ -731,6 +896,9 @@ function SocketBlock({
           onRemove={() => onRemove(slotIndex)}
           connectedPins={connectedPins}
           disconnectPin={disconnectPin}
+          selectedPin={selectedPin}
+          handlePinClick={handlePinClick}
+          justDraggedRef={justDraggedRef}
         />
       ) : null}
     </div>
@@ -753,7 +921,10 @@ function ModulePlate({
   sourceHandlers,
   onRemove,
   connectedPins,
-  disconnectPin
+  disconnectPin,
+  selectedPin,
+  handlePinClick,
+  justDraggedRef
 }: {
   module: PlacedModule;
   values: Record<string, boolean>;
@@ -761,6 +932,9 @@ function ModulePlate({
   onRemove: () => void;
   connectedPins: Set<string>;
   disconnectPin: (pin: string) => void;
+  selectedPin: string | null;
+  handlePinClick: (pin: string) => void;
+  justDraggedRef: React.MutableRefObject<boolean>;
 }) {
   return (
     <div
@@ -783,11 +957,16 @@ function ModulePlate({
             type="button"
             data-pin-id={pin}
             style={modulePinStyle(module, index, "in", Boolean(values[pin]))}
-            className={`pin-metal absolute left-0 z-30 h-5 w-5 -translate-y-1/2 rounded-full ${connectedPins.has(pin) ? "ring-4 ring-[#ffd000]" : ""}`}
+            className={`pin-metal absolute left-0 z-30 h-5 w-5 -translate-y-1/2 rounded-full ${connectedPins.has(pin) ? "ring-4 ring-[#ffd000]" : ""} ${selectedPin === pin ? "outline outline-4 outline-[#ffea00]" : ""}`}
             aria-label={`${module.title} input ${index + 1}`}
             onClick={(event) => {
               event.stopPropagation();
+              if (justDraggedRef.current) {
+                justDraggedRef.current = false;
+                return;
+              }
               if (connectedPins.has(pin)) disconnectPin(pin);
+              else handlePinClick(pin);
             }}
             {...sourceHandlers(pin)}
           />
@@ -800,11 +979,16 @@ function ModulePlate({
             type="button"
             data-pin-id={pin}
             style={modulePinStyle(module, index, "out", Boolean(values[pin]))}
-            className={`pin-metal absolute right-0 z-30 h-5 w-5 -translate-y-1/2 rounded-full ${connectedPins.has(pin) ? "ring-4 ring-[#ffd000]" : ""}`}
+            className={`pin-metal absolute right-0 z-30 h-5 w-5 -translate-y-1/2 rounded-full ${connectedPins.has(pin) ? "ring-4 ring-[#ffd000]" : ""} ${selectedPin === pin ? "outline outline-4 outline-[#ffea00]" : ""}`}
             aria-label={`${module.title} output ${index + 1}`}
             onClick={(event) => {
               event.stopPropagation();
+              if (justDraggedRef.current) {
+                justDraggedRef.current = false;
+                return;
+              }
               if (connectedPins.has(pin)) disconnectPin(pin);
+              else handlePinClick(pin);
             }}
             {...sourceHandlers(pin)}
           />
@@ -819,33 +1003,102 @@ function ModulePlate({
   );
 }
 
-function RightOutputs({ power, setPower, values }: { power: boolean; setPower: (power: boolean) => void; values: Record<string, boolean> }) {
+function RightOutputs({
+  power,
+  setPower,
+  values,
+  connectedPins,
+  selectedPin,
+  handlePinClick,
+  disconnectPin,
+  sourceHandlers,
+  dragging,
+  justDraggedRef
+}: {
+  power: boolean;
+  setPower: (power: boolean) => void;
+  values: Record<string, boolean>;
+  connectedPins: Set<string>;
+  selectedPin: string | null;
+  handlePinClick: (pin: string) => void;
+  disconnectPin: (pin: string) => void;
+  sourceHandlers: (pin: string) => {
+    onPointerDown: (event: PointerEvent<HTMLElement>) => void;
+    onPointerMove: (event: PointerEvent<HTMLElement>) => void;
+    onPointerUp: (event: PointerEvent<HTMLElement>) => void;
+    onPointerCancel: () => void;
+  };
+  dragging: boolean;
+  justDraggedRef: React.MutableRefObject<boolean>;
+}) {
   return (
     <aside className="col-start-3 row-start-2 grid gap-3">
       <Panel title="Anode Common 7-Segment">
-        <SevenSegment prefix="ANODE" values={values} />
+        <SevenSegment
+          prefix="ANODE"
+          values={values}
+          connectedPins={connectedPins}
+          selectedPin={selectedPin}
+          handlePinClick={handlePinClick}
+          disconnectPin={disconnectPin}
+          sourceHandlers={sourceHandlers}
+          dragging={dragging}
+          justDraggedRef={justDraggedRef}
+        />
       </Panel>
       <Panel title="Cathode Common 7-Segment">
-        <SevenSegment prefix="CATHODE" values={values} />
+        <SevenSegment
+          prefix="CATHODE"
+          values={values}
+          connectedPins={connectedPins}
+          selectedPin={selectedPin}
+          handlePinClick={handlePinClick}
+          disconnectPin={disconnectPin}
+          sourceHandlers={sourceHandlers}
+          dragging={dragging}
+          justDraggedRef={justDraggedRef}
+        />
       </Panel>
       <Panel title="LED">
         <div className="grid grid-cols-4 gap-3">
-          {Array.from({ length: 16 }, (_, index) => (
-            <div key={index} className="flex items-center justify-center gap-0">
-              <span className="relative grid h-9 w-9 place-items-center rounded-full border-2 border-[#777] bg-[#c9c9c9] shadow-inner">
-                <span
-                  className={`relative h-7 w-7 rounded-full border border-[#8d8d8d] shadow-inner after:absolute after:left-1.5 after:top-1 after:h-2 after:w-3 after:rounded-full after:bg-white/70 after:content-[''] ${
-                    values[`LED${index}`]
-                      ? "bg-[radial-gradient(circle_at_35%_28%,#fff,#ff7777_34%,#e00000_68%,#650000_100%)] shadow-[0_0_16px_#ff2a2a]"
-                      : "bg-[radial-gradient(circle_at_35%_28%,#ffffff,#d7d7d7_42%,#777_100%)]"
+          {Array.from({ length: 16 }, (_, index) => {
+            const id = `LED${index}`;
+            const isConnected = connectedPins.has(id);
+            const isSelected = selectedPin === id;
+            return (
+              <div key={index} className="flex items-center justify-center gap-1.5">
+                <span className="relative grid h-9 w-9 place-items-center rounded-full border-2 border-[#777] bg-[#c9c9c9] shadow-inner">
+                  <span
+                    className={`relative h-7 w-7 rounded-full border border-[#8d8d8d] shadow-inner after:absolute after:left-1.5 after:top-1 after:h-2 after:w-3 after:rounded-full after:bg-white/70 after:content-[''] ${
+                      values[id]
+                        ? "bg-[radial-gradient(circle_at_35%_28%,#fff,#ff7777_34%,#e00000_68%,#650000_100%)] shadow-[0_0_16px_#ff2a2a]"
+                        : "bg-[radial-gradient(circle_at_35%_28%,#ffffff,#d7d7d7_42%,#777_100%)]"
+                    }`}
+                  />
+                </span>
+                <button
+                  type="button"
+                  data-pin-id={id}
+                  className={`pin-metal z-30 h-5 w-5 shrink-0 rounded-full transition-opacity ${
+                    isConnected ? "ring-4 ring-[#ffd000]" : ""
+                  } ${isSelected ? "outline outline-4 outline-[#ffea00]" : ""} ${
+                    dragging || isSelected || isConnected ? "opacity-100" : "opacity-60 hover:opacity-100"
                   }`}
+                  aria-label={`LED ${index + 1} input connector`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (justDraggedRef.current) {
+                      justDraggedRef.current = false;
+                      return;
+                    }
+                    if (isConnected) disconnectPin(id);
+                    else handlePinClick(id);
+                  }}
+                  {...sourceHandlers(id)}
                 />
-              </span>
-              <span data-pin-id={`LED${index}`} className="grid h-12 w-12 place-items-center rounded-full">
-                <span className="pin-metal h-4 w-4 rounded-full" />
-              </span>
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       </Panel>
       <Panel title="Power(+5V)">
@@ -1034,22 +1287,91 @@ function AnsiGate({ type, x, y }: { type: GateType | "NAND"; x: number; y: numbe
   );
 }
 
-function SevenSegment({ prefix, values }: { prefix: "ANODE" | "CATHODE"; values: Record<string, boolean> }) {
+function SevenSegment({
+  prefix,
+  values,
+  connectedPins,
+  selectedPin,
+  handlePinClick,
+  disconnectPin,
+  sourceHandlers,
+  dragging,
+  justDraggedRef
+}: {
+  prefix: "ANODE" | "CATHODE";
+  values: Record<string, boolean>;
+  connectedPins: Set<string>;
+  selectedPin: string | null;
+  handlePinClick: (pin: string) => void;
+  disconnectPin: (pin: string) => void;
+  sourceHandlers: (pin: string) => {
+    onPointerDown: (event: PointerEvent<HTMLElement>) => void;
+    onPointerMove: (event: PointerEvent<HTMLElement>) => void;
+    onPointerUp: (event: PointerEvent<HTMLElement>) => void;
+    onPointerCancel: () => void;
+  };
+  dragging: boolean;
+  justDraggedRef: React.MutableRefObject<boolean>;
+}) {
   const segs = ["a", "b", "c", "d", "e", "f", "g"] as const;
+  const pins = [...segs, "dp"] as const;
   return (
-    <div className="flex items-center justify-center gap-3">
+    <div className="grid grid-cols-[80px_1fr] items-start gap-3">
       <div className="relative h-28 w-20 rounded-sm border-4 border-[#101010] bg-[#0a0a0a] shadow-inner">
         {segs.map((seg) => (
-          <span key={seg} className={`absolute rounded-sm ${segmentClass(seg)} ${values[`${prefix}-${seg}`] ? "seven-seg-shadow bg-[#ff2424]" : "bg-[#351010]"}`} />
+          <span
+            key={seg}
+            className={`absolute rounded-sm ${segmentClass(seg)} ${
+              values[`${prefix}-${seg}`] ? "seven-seg-shadow bg-[#ff2424]" : "bg-[#351010]"
+            }`}
+          />
         ))}
-        <span className={`absolute bottom-2 right-2 h-2.5 w-2.5 rounded-full ${values[`${prefix}-dp`] ? "bg-[#ff2424]" : "bg-[#351010]"}`} />
+        <span
+          className={`absolute bottom-2 right-2 h-2.5 w-2.5 rounded-full ${
+            values[`${prefix}-dp`] ? "bg-[#ff2424]" : "bg-[#351010]"
+          }`}
+        />
       </div>
-      <div className="grid grid-cols-2 gap-1">
-        {[...segs, "dp"].map((seg) => (
-          <span key={seg} data-pin-id={`${prefix}-${seg}`} className="grid h-12 w-12 place-items-center rounded-full">
-            <span className="pin-metal h-4 w-4 rounded-full" />
-          </span>
-        ))}
+      <div className="flex flex-col gap-1.5">
+        {pins.map((seg) => {
+          const id = `${prefix}-${seg}`;
+          const active = Boolean(values[id]);
+          const isSelected = selectedPin === id;
+          const isConnected = connectedPins.has(id);
+          return (
+            <div key={seg} className="flex items-center gap-2">
+              <button
+                type="button"
+                data-pin-id={id}
+                className={`pin-metal z-30 h-5 w-5 shrink-0 rounded-full transition-opacity ${
+                  isConnected ? "ring-4 ring-[#ffd000]" : ""
+                } ${isSelected ? "outline outline-4 outline-[#ffea00]" : ""} ${
+                  dragging || isSelected || isConnected ? "opacity-100" : "opacity-60 hover:opacity-100"
+                }`}
+                style={
+                  active
+                    ? {
+                        background:
+                          "radial-gradient(circle at 35% 32%, #fff8b0 0 14%, #ffd000 34%, #bd8a00 68%, #5b3d00 100%)"
+                      }
+                    : undefined
+                }
+                aria-label={`${prefix} ${seg} connector`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (justDraggedRef.current) {
+                    justDraggedRef.current = false;
+                    return;
+                  }
+                  if (isConnected) disconnectPin(id);
+                  else handlePinClick(id);
+                }}
+                {...sourceHandlers(id)}
+              />
+              <span className="text-[11px] font-black uppercase text-[#111]">{seg}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1074,14 +1396,17 @@ const WireLayer = forwardRef<SVGSVGElement, {
   pinBoxes: Record<string, PinBox>;
   values: Record<string, boolean>;
 }>(function WireLayer({ wires, dragWire, pinBoxes, values }, ref) {
+  const dragging = Boolean(dragWire);
   return (
     <svg ref={ref} className="pointer-events-none absolute inset-0 z-20 h-full w-full overflow-visible">
-      {wires.map((wire) => {
-        const from = pinBoxes[wire.from];
-        const to = pinBoxes[wire.to];
-        if (!from || !to) return null;
-        return <WirePath key={wire.id} from={from} to={to} color={values[wire.from] ? "#34ff61" : wire.color} />;
-      })}
+      <g style={{ opacity: dragging ? 1 : 0.55, transition: "opacity 120ms ease" }}>
+        {wires.map((wire) => {
+          const from = pinBoxes[wire.from];
+          const to = pinBoxes[wire.to];
+          if (!from || !to) return null;
+          return <WirePath key={wire.id} from={from} to={to} color={values[wire.from] ? "#34ff61" : wire.color} />;
+        })}
+      </g>
       {dragWire && pinBoxes[dragWire.from] ? <WirePath from={pinBoxes[dragWire.from]} to={dragWire.point} color="#ffb000" preview /> : null}
     </svg>
   );
