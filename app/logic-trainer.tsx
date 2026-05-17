@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  forwardRef,
   PointerEvent,
   useCallback,
   useContext,
@@ -120,6 +121,7 @@ function makePlacedModule(template: ModuleTemplate, slotIndex: number, instanceI
 
 export default function LogicTrainer() {
   const boardRef = useRef<HTMLDivElement | null>(null);
+  const wireLayerRef = useRef<SVGSVGElement | null>(null);
   const [power, setPower] = useState(true);
   const [dip, setDip] = useState<boolean[]>(Array(32).fill(false));
   const [slides, setSlides] = useState<boolean[]>(Array(12).fill(false));
@@ -143,16 +145,16 @@ export default function LogicTrainer() {
   }, [dial]);
 
   const readPins = useCallback(() => {
-    const board = boardRef.current?.getBoundingClientRect();
-    if (!board) return;
+    const layer = wireLayerRef.current?.getBoundingClientRect() || boardRef.current?.getBoundingClientRect();
+    if (!layer) return;
     const next: Record<string, PinBox> = {};
     document.querySelectorAll<HTMLElement>("[data-pin-id]").forEach((node) => {
       const id = node.dataset.pinId;
       if (!id) return;
       const rect = node.getBoundingClientRect();
       next[id] = {
-        x: rect.left - board.left + rect.width / 2,
-        y: rect.top - board.top + rect.height / 2
+        x: rect.left - layer.left + rect.width / 2,
+        y: rect.top - layer.top + rect.height / 2
       };
     });
     setPinBoxes(next);
@@ -280,16 +282,16 @@ export default function LogicTrainer() {
   function beginWire(event: PointerEvent<HTMLElement>, from: string) {
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
-    const board = boardRef.current?.getBoundingClientRect();
-    if (!board) return;
-    setDragWire({ from, point: { x: event.clientX - board.left, y: event.clientY - board.top } });
+    const layer = wireLayerRef.current?.getBoundingClientRect() || boardRef.current?.getBoundingClientRect();
+    if (!layer) return;
+    setDragWire({ from, point: { x: event.clientX - layer.left, y: event.clientY - layer.top } });
   }
 
   function moveWire(event: PointerEvent<HTMLElement>) {
     if (!dragWire) return;
-    const board = boardRef.current?.getBoundingClientRect();
-    if (!board) return;
-    setDragWire({ ...dragWire, point: { x: event.clientX - board.left, y: event.clientY - board.top } });
+    const layer = wireLayerRef.current?.getBoundingClientRect() || boardRef.current?.getBoundingClientRect();
+    if (!layer) return;
+    setDragWire({ ...dragWire, point: { x: event.clientX - layer.left, y: event.clientY - layer.top } });
   }
 
   function finishWire(event: PointerEvent<HTMLElement>) {
@@ -341,7 +343,7 @@ export default function LogicTrainer() {
               onPointerMove={moveWire}
               onPointerUp={finishWire}
             >
-              <WireLayer wires={wires} dragWire={dragWire} pinBoxes={pinBoxes} values={values} />
+              <WireLayer ref={wireLayerRef} wires={wires} dragWire={dragWire} pinBoxes={pinBoxes} values={values} />
               <CaseHardware />
               <PullRail top values={values} sourceHandlers={sourceHandlers} />
               <LeftInputs
@@ -829,9 +831,19 @@ function RightOutputs({ power, setPower, values }: { power: boolean; setPower: (
       <Panel title="LED">
         <div className="grid grid-cols-4 gap-3">
           {Array.from({ length: 16 }, (_, index) => (
-            <div key={index} className="flex items-center justify-center gap-1">
-              <span className={`h-7 w-7 rounded-full border border-[#a1a1a1] ${values[`LED${index}`] ? "bg-[radial-gradient(circle_at_35%_28%,#fff,#ff6b6b_42%,#b30000_80%)] shadow-[0_0_14px_#ff1f1f]" : "bg-[radial-gradient(circle_at_35%_28%,#fafafa,#dadada_44%,#8d8d8d_88%)]"} shadow-inner`} />
-              <span data-pin-id={`LED${index}`} className="pin-metal h-4 w-4 rounded-full" />
+            <div key={index} className="flex items-center justify-center gap-0">
+              <span className="relative grid h-9 w-9 place-items-center rounded-full border-2 border-[#777] bg-[#c9c9c9] shadow-inner">
+                <span
+                  className={`relative h-7 w-7 rounded-full border border-[#8d8d8d] shadow-inner after:absolute after:left-1.5 after:top-1 after:h-2 after:w-3 after:rounded-full after:bg-white/70 after:content-[''] ${
+                    values[`LED${index}`]
+                      ? "bg-[radial-gradient(circle_at_35%_28%,#fff,#ff7777_34%,#e00000_68%,#650000_100%)] shadow-[0_0_16px_#ff2a2a]"
+                      : "bg-[radial-gradient(circle_at_35%_28%,#ffffff,#d7d7d7_42%,#777_100%)]"
+                  }`}
+                />
+              </span>
+              <span data-pin-id={`LED${index}`} className="grid h-12 w-12 place-items-center rounded-full">
+                <span className="pin-metal h-4 w-4 rounded-full" />
+              </span>
             </div>
           ))}
         </div>
@@ -1034,7 +1046,9 @@ function SevenSegment({ prefix, values }: { prefix: "ANODE" | "CATHODE"; values:
       </div>
       <div className="grid grid-cols-2 gap-1">
         {[...segs, "dp"].map((seg) => (
-          <span key={seg} data-pin-id={`${prefix}-${seg}`} className="pin-metal h-4 w-4 rounded-full" />
+          <span key={seg} data-pin-id={`${prefix}-${seg}`} className="grid h-12 w-12 place-items-center rounded-full">
+            <span className="pin-metal h-4 w-4 rounded-full" />
+          </span>
         ))}
       </div>
     </div>
@@ -1054,19 +1068,14 @@ function segmentClass(seg: string) {
   return map[seg];
 }
 
-function WireLayer({
-  wires,
-  dragWire,
-  pinBoxes,
-  values
-}: {
+const WireLayer = forwardRef<SVGSVGElement, {
   wires: Wire[];
   dragWire: { from: string; point: PinBox } | null;
   pinBoxes: Record<string, PinBox>;
   values: Record<string, boolean>;
-}) {
+}>(function WireLayer({ wires, dragWire, pinBoxes, values }, ref) {
   return (
-    <svg className="pointer-events-none absolute inset-0 z-20 h-full w-full overflow-visible">
+    <svg ref={ref} className="pointer-events-none absolute inset-0 z-20 h-full w-full overflow-visible">
       {wires.map((wire) => {
         const from = pinBoxes[wire.from];
         const to = pinBoxes[wire.to];
@@ -1076,7 +1085,7 @@ function WireLayer({
       {dragWire && pinBoxes[dragWire.from] ? <WirePath from={pinBoxes[dragWire.from]} to={dragWire.point} color="#ffb000" preview /> : null}
     </svg>
   );
-}
+});
 
 function WirePath({ from, to, color, preview = false }: { from: PinBox; to: PinBox; color: string; preview?: boolean }) {
   const dx = Math.max(54, Math.abs(to.x - from.x) * 0.42);
@@ -1104,7 +1113,7 @@ function nearestCompatiblePin(clientX: number, clientY: number, from: string) {
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
     const distance = Math.hypot(clientX - x, clientY - y);
-    if (distance <= 42 && distance < bestDistance) {
+    if (distance <= 64 && distance < bestDistance) {
       bestId = id;
       bestDistance = distance;
     }
