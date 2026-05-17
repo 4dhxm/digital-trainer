@@ -31,7 +31,9 @@ type GateType =
   | "JK7473"
   | "D7474"
   | "TIMER555"
-  | "ASTABLE";
+  | "ASTABLE"
+  | "HALF_ADDER"
+  | "HALF_SUB";
 
 type ModuleTemplate = {
   templateId: string;
@@ -105,7 +107,9 @@ const inventory: ModuleTemplate[] = [
   item("7474", "Dual D Flip Flop", "7474", "D7474", 2, 2, 2, "Registers"),
   item("NE555", "Timer Module", "NE555", "TIMER555", 1, 1, 1, "Application Circuits"),
   item("2SC1815", "Multivibrator 1", "2SC1815", "ASTABLE", 2, 1, 2, "Application Circuits"),
-  item("2SC1266", "Multivibrator 2", "2SC1266", "ASTABLE", 1, 1, 2, "Application Circuits")
+  item("2SC1266", "Multivibrator 2", "2SC1266", "ASTABLE", 1, 1, 2, "Application Circuits"),
+  item("HA", "Half Adder", "HA", "HALF_ADDER", 4, 2, 2, "Combinational Logic"),
+  item("HS", "Half Subtracter", "HS", "HALF_SUB", 4, 2, 2, "Combinational Logic")
 ];
 
 function item(
@@ -481,7 +485,7 @@ export default function LogicTrainer() {
             >
               <WireLayer ref={wireLayerRef} wires={wires} dragWire={dragWire} pinBoxes={pinBoxes} values={values} />
               <CaseHardware />
-              <PullRail top values={values} sourceHandlers={sourceHandlers} />
+              <PullRail top values={values} sourceHandlers={sourceHandlers} connectedSources={connectedSources} disconnectSource={disconnectSource} />
               <LeftInputs
                 dip={dip}
                 setDip={setDip}
@@ -520,7 +524,7 @@ export default function LogicTrainer() {
                 dragging={Boolean(dragWire)}
                 justDraggedRef={justDraggedRef}
               />
-              <PullRail values={values} sourceHandlers={sourceHandlers} />
+              <PullRail values={values} sourceHandlers={sourceHandlers} connectedSources={connectedSources} disconnectSource={disconnectSource} />
             </section>
             <div className="metal-edge flex h-20 items-center justify-center rounded-b-[18px] border-x-[18px] border-b-[10px] border-[#252525] shadow-2xl">
               <div className="h-10 w-64 rounded-b-full border-4 border-[#5b5b5b] bg-gradient-to-b from-[#efefef] to-[#787878] shadow-inner" />
@@ -615,11 +619,15 @@ function CaseHardware() {
 function PullRail({
   top = false,
   values,
-  sourceHandlers
+  sourceHandlers,
+  connectedSources,
+  disconnectSource
 }: {
   top?: boolean;
   values: Record<string, boolean>;
   sourceHandlers: (pin: string) => object;
+  connectedSources: Set<string>;
+  disconnectSource: (source: string) => void;
 }) {
   const prefix = top ? "PU" : "PD";
   return (
@@ -627,19 +635,26 @@ function PullRail({
       <FourScrews />
       <div className="mb-2 text-center text-[13px] font-black printed-label">{top ? "Pull-up Resistor Block" : "Pull-down Resistor Block"}</div>
       <div className="mx-auto grid w-[980px] grid-cols-[repeat(16,minmax(0,1fr))] gap-4">
-        {Array.from({ length: 16 }, (_, index) => (
-          <div key={index} className="flex flex-col items-center gap-1">
-            <button
-              type="button"
-              data-pin-id={`${prefix}${index}`}
-              className={`pin-metal h-5 w-5 rounded-full ${values[`${prefix}${index}`] ? "ring-2 ring-green-400" : ""}`}
-              aria-label={`${prefix}${index + 1} pin`}
-              {...sourceHandlers(`${prefix}${index}`)}
-            />
+        {Array.from({ length: 16 }, (_, index) => {
+          const id = `${prefix}${index}`;
+          const isConnected = connectedSources.has(id);
+          return (
+            <div key={index} className="flex flex-col items-center gap-1">
+              <button
+                type="button"
+                data-pin-id={id}
+                className={`pin-metal h-5 w-5 rounded-full ${values[id] ? "ring-2 ring-green-400" : ""} ${isConnected ? "ring-4 ring-[#ffd000]" : ""}`}
+                aria-label={`${id} pin`}
+                onClick={() => {
+                  if (isConnected) disconnectSource(id);
+                }}
+                {...sourceHandlers(id)}
+              />
             <ResistorIcon ground={!top} />
-            <span className="text-[9px] font-black printed-label">{top ? "+5V" : "GND"}</span>
-          </div>
-        ))}
+              <span className="text-[9px] font-black printed-label">{top ? "+5V" : "GND"}</span>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -672,14 +687,19 @@ function LeftInputs(props: {
             <div key={bank} className="grid grid-cols-8 gap-1 rounded bg-white/80 p-1 shadow-inner">
               {Array.from({ length: 8 }, (_, bit) => {
                 const index = bank * 8 + bit;
+                const id = `DIP${index}`;
+                const isConnected = props.connectedSources.has(id);
                 return (
                   <button
                     key={index}
                     type="button"
-                    data-pin-id={`DIP${index}`}
-                    className={`relative h-9 rounded-[2px] border border-[#9b9b9b] bg-[#f8f8f8] shadow-md ${props.dip[index] ? "pt-1" : "pb-1"}`}
-                    onClick={() => props.setDip(props.dip.map((value, i) => (i === index ? !value : value)))}
-                    {...props.sourceHandlers(`DIP${index}`)}
+                    data-pin-id={id}
+                    className={`relative h-9 rounded-[2px] border border-[#9b9b9b] bg-[#f8f8f8] shadow-md ${props.dip[index] ? "pt-1" : "pb-1"} ${isConnected ? "ring-4 ring-[#ffd000]" : ""}`}
+                    onClick={() => {
+                      if (isConnected) props.disconnectSource(id);
+                      else props.setDip(props.dip.map((value, i) => (i === index ? !value : value)));
+                    }}
+                    {...props.sourceHandlers(id)}
                     aria-label={`DIP ${index + 1}`}
                   >
                     <span className={`block h-4 w-full rounded-[1px] border border-[#671212] bg-gradient-to-b ${props.dip[index] ? "from-[#ff7772] to-[#b11818]" : "from-[#8b1212] to-[#ff4b43]"}`} />
@@ -692,19 +712,26 @@ function LeftInputs(props: {
       </Panel>
       <Panel title="Slide Switch">
         <div className="grid grid-cols-4 gap-2">
-          {props.slides.map((value, index) => (
-            <button
-              key={index}
-              type="button"
-              data-pin-id={`SLIDE${index}`}
-              className="h-10 rounded-sm border border-[#151515] bg-[#1b1b1b] p-1 shadow-inner"
-              onClick={() => props.setSlides(props.slides.map((item, i) => (i === index ? !item : item)))}
-              {...props.sourceHandlers(`SLIDE${index}`)}
-              aria-label={`Slide switch ${index + 1}`}
-            >
-              <span className={`block h-full w-1/2 rounded-sm bg-gradient-to-b from-[#4a4a4a] to-[#050505] shadow-md transition-transform ${value ? "translate-x-full" : ""}`} />
-            </button>
-          ))}
+          {props.slides.map((value, index) => {
+            const id = `SLIDE${index}`;
+            const isConnected = props.connectedSources.has(id);
+            return (
+              <button
+                key={index}
+                type="button"
+                data-pin-id={id}
+                className={`h-10 rounded-sm border border-[#151515] bg-[#1b1b1b] p-1 shadow-inner ${isConnected ? "ring-4 ring-[#ffd000]" : ""}`}
+                onClick={() => {
+                  if (isConnected) props.disconnectSource(id);
+                  else props.setSlides(props.slides.map((item, i) => (i === index ? !item : item)));
+                }}
+                {...props.sourceHandlers(id)}
+                aria-label={`Slide switch ${index + 1}`}
+              >
+                <span className={`block h-full w-1/2 rounded-sm bg-gradient-to-b from-[#4a4a4a] to-[#050505] shadow-md transition-transform ${value ? "translate-x-full" : ""}`} />
+              </button>
+            );
+          })}
         </div>
       </Panel>
       <Panel title="Button Switch">
@@ -725,7 +752,16 @@ function LeftInputs(props: {
       </Panel>
       <Panel title="Waveform Generator">
         <div className="flex items-center justify-between">
-          <button type="button" data-pin-id="PULSE" className="pin-metal h-6 w-6 rounded-full" {...props.sourceHandlers("PULSE")} aria-label="Pulse output" />
+          <button
+            type="button"
+            data-pin-id="PULSE"
+            className={`pin-metal h-6 w-6 rounded-full ${props.connectedSources.has("PULSE") ? "ring-4 ring-[#ffd000]" : ""}`}
+            onClick={() => {
+              if (props.connectedSources.has("PULSE")) props.disconnectSource("PULSE");
+            }}
+            {...props.sourceHandlers("PULSE")}
+            aria-label="Pulse output"
+          />
           <div className="relative grid h-20 w-20 place-items-center rounded-full border-4 border-[#aaa] bg-gradient-to-br from-[#e8e8e8] to-[#777] shadow-inner">
             <div className="h-14 w-14 rounded-full border-2 border-[#134f73] bg-[radial-gradient(circle_at_35%_28%,#58b9dc,#105579_72%)] shadow-md" />
             <div className="absolute left-1/2 top-2 h-8 w-1 origin-bottom -translate-x-1/2 rounded bg-[#052b3a]" style={{ transform: `translateX(-50%) rotate(${Math.min(300, (props.dial / 1000) * 300)}deg)` }} />
@@ -971,6 +1007,14 @@ function ModulePlate({
             {...sourceHandlers(pin)}
           />
         ))}
+        {(module.type === "HALF_ADDER" || module.type === "HALF_SUB") &&
+          module.inputPins.map((pin, index) => (
+            <span
+              key={`led-in-${pin}`}
+              className={`absolute left-3 z-20 h-2 w-2 -translate-y-1/2 rounded-full border border-[#6b0808] ${values[pin] ? "bg-[radial-gradient(circle_at_35%_28%,#fff,#ff6767_42%,#c40000_80%)] shadow-[0_0_6px_#ff1f1f]" : "bg-[radial-gradient(circle_at_35%_28%,#5b1515,#1c0505_75%)]"}`}
+              style={{ top: `${pinTop(module, index, "in")}px` }}
+            />
+          ))}
       </div>
       <div className="absolute inset-0">
         {module.outputPins.map((pin, index) => (
@@ -993,6 +1037,14 @@ function ModulePlate({
             {...sourceHandlers(pin)}
           />
         ))}
+        {(module.type === "HALF_ADDER" || module.type === "HALF_SUB") &&
+          module.outputPins.map((pin, index) => (
+            <span
+              key={`led-out-${pin}`}
+              className={`absolute right-3 z-20 h-2 w-2 -translate-y-1/2 rounded-full border border-[#6b0808] ${values[pin] ? "bg-[radial-gradient(circle_at_35%_28%,#fff,#ff6767_42%,#c40000_80%)] shadow-[0_0_6px_#ff1f1f]" : "bg-[radial-gradient(circle_at_35%_28%,#5b1515,#1c0505_75%)]"}`}
+              style={{ top: `${pinTop(module, index, "out")}px` }}
+            />
+          ))}
       </div>
       <LogicDiagram module={module} />
       <div className="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2">
@@ -1173,6 +1225,8 @@ function pinTop(module: PlacedModule, index: number, side: "in" | "out") {
   if (dual2 && side === "out") return [65, 115][index] ?? 65;
   if (module.type === "NOT" && side === "in") return [65, 115][index] ?? 65;
   if (module.type === "NOT" && side === "out") return [65, 115][index] ?? 65;
+  if ((module.type === "HALF_ADDER" || module.type === "HALF_SUB") && side === "in") return [65, 115][index] ?? 65;
+  if ((module.type === "HALF_ADDER" || module.type === "HALF_SUB") && side === "out") return [65, 115][index] ?? 65;
   if (module.type === "NAND3" && side === "in") return [48, 60, 72, 102, 114, 126][index] ?? 48;
   if (module.type === "NAND3" && side === "out") return [60, 114][index] ?? 60;
   if (module.type === "NAND4" && side === "in") return [42, 54, 66, 78, 96, 108, 120, 132][index] ?? 42;
@@ -1229,6 +1283,14 @@ function PrintedRouting({ module }: { module: PlacedModule }) {
       </>
     );
   }
+  if (module.type === "HALF_ADDER" || module.type === "HALF_SUB") {
+    return (
+      <>
+        <path d={`M0 ${y(0, "in")} H42 M0 ${y(1, "in")} H42`} />
+        <path d={`M108 ${y(0, "out")} H170 M108 ${y(1, "out")} H170`} />
+      </>
+    );
+  }
   return (
     <>
       {module.inputPins.map((_, index) => <path key={`i-${index}`} d={`M0 ${y(index, "in")} H48`} />)}
@@ -1238,6 +1300,7 @@ function PrintedRouting({ module }: { module: PlacedModule }) {
 }
 
 function PrintedSymbol({ module }: { module: PlacedModule }) {
+  const y = (pinIndex: number, side: "in" | "out") => pinTop(module, pinIndex, side) - 32;
   if (["NAND", "NOR", "AND", "OR", "XOR"].includes(module.type)) {
     return (
       <>
@@ -1259,6 +1322,29 @@ function PrintedSymbol({ module }: { module: PlacedModule }) {
       <>
         <AnsiGate type="NAND" x={42} y={13} />
         <AnsiGate type="NAND" x={42} y={67} />
+      </>
+    );
+  }
+  if (module.type === "HALF_ADDER") {
+    return (
+      <>
+        <path d={`M20 ${y(0, "in")} V${y(0, "out")} H42`} />
+        <path d={`M20 ${y(1, "in")} V${y(0, "in") + 15} H42`} />
+        <AnsiGate type="XOR" x={42} y={18} />
+        <AnsiGate type="AND" x={42} y={68} />
+      </>
+    );
+  }
+  if (module.type === "HALF_SUB") {
+    return (
+      <>
+        <path d={`M20 ${y(0, "in")} V60`} />
+        <path d="M12 60 L34 68 L12 76 Z" />
+        <circle cx="37" cy="68" r="2.5" />
+        <path d="M37 68 H42" />
+        <path d={`M20 ${y(1, "in")} V${y(0, "in") + 15} H42`} />
+        <AnsiGate type="XOR" x={42} y={18} />
+        <AnsiGate type="AND" x={42} y={68} />
       </>
     );
   }
@@ -1523,6 +1609,10 @@ function evaluateModule(module: PlacedModule, input: boolean[], memory: Record<s
       return [pulse];
     case "ASTABLE":
       return [pulse, !pulse];
+    case "HALF_ADDER":
+      return [input[0] !== input[1], input[0] && input[1]];
+    case "HALF_SUB":
+      return [input[0] !== input[1], !input[0] && input[1]];
     default:
       return [false];
   }
